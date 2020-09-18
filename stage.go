@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/ipfs/go-cid"
 	shell "github.com/ipfs/go-ipfs-api"
 	powergate "github.com/textileio/powergate/api/client"
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"io"
@@ -27,6 +25,14 @@ type Stage struct {
 	DirPath          string `short:"d" long:"directory path" description:"The path to the directory to stage."`
 }
 
+type Object struct {
+	Path     string
+	Cid      string
+	Size     uint64
+	IsDir    bool
+	BucketID string
+}
+
 func (x *Stage) Execute(args []string) error {
 	sh := shell.NewShell(x.IpfsAPI)
 
@@ -42,82 +48,96 @@ func (x *Stage) Execute(args []string) error {
 	}
 	defer dbClient.Disconnect(context.Background())
 
-	db := dbClient.Database("filemapdb")
-	collection := db.Collection("files")
+	collection := dbClient.Database("filemapdb").Collection("files")
 
 	x.DirPath = strings.TrimSuffix(x.DirPath, "/")
-	cid, err := sh.AddDir(x.DirPath)
+
+	fmt.Print("Adding to IPFS...")
+	rootCid, err := sh.AddDir(x.DirPath)
 	if err != nil {
 		return err
 	}
+	fmt.Print("done\n")
+	fmt.Printf("IPFS Root Cid: %s\n\n", rootCid)
 
-	files := make(map[ipfsObject]struct{})
-	if err := enumerateFiles("/ipfs/"+cid, cid, sh, files); err != nil {
+	files := make(map[Object]struct{})
+	if err := enumerateFiles("/ipfs/"+rootCid, rootCid, sh, files); err != nil {
 		return err
 	}
 
-	buckets := make([][]ipfsObject, 1)
-	idx, bucketSize := 0, 0
+	buckets := make([][]Object, 2)
+	idx, bucketSize := 1, uint64(0)
 	for f := range files {
-		if bucketSize+f.size > maxBucketSize {
-			buckets = append(buckets, []ipfsObject{})
+		if f.IsDir {
+			buckets[0] = append(buckets[0], f)
+			continue
+		}
+
+		if bucketSize+f.Size > maxBucketSize {
+			buckets = append(buckets, []Object{})
 			idx++
 			bucketSize = 0
 		}
-		bucketSize += f.size
+		bucketSize += f.Size
 		buckets[idx] = append(buckets[idx], f)
 	}
 
-	for i, bucket := range buckets {
+	tmp0 := path.Join(os.TempDir(), fmt.Sprintf("amzn-bucket%d", 0))
+	if err := os.Mkdir(tmp0, os.ModePerm); err != nil {
+		return err
+	}
+	for _, f := range buckets[0] {
+		blk, err := sh.BlockGet(f.Path)
+		if err != nil {
+			return err
+		}
+		if err := ioutil.WriteFile(path.Join(tmp0, f.Cid), blk, os.ModePerm); err != nil {
+			return err
+		}
+	}
+
+	var bucketCids []string
+	ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateAuthKey)
+	outCid, err := client.FFS.StageFolder(ctx, x.IPFSReverseProxy, tmp0)
+	if err != nil {
+		return err
+	}
+	bucketCids = append(bucketCids, outCid.String())
+	if err := os.RemoveAll(tmp0); err != nil {
+		return err
+	}
+
+	for i := range buckets[0] {
+		buckets[0][i].BucketID = outCid.String()
+		_, err = collection.InsertOne(context.Background(), buckets[0][i])
+		if err != nil {
+			return err
+		}
+	}
+
+	fmt.Print("Staging in powergate...")
+	for i, bucket := range buckets[1:] {
 		tmp := path.Join(os.TempDir(), fmt.Sprintf("amzn-bucket%d", i))
 		if err := os.Mkdir(tmp, os.ModePerm); err != nil {
 			return err
 		}
 
 		for _, f := range bucket {
-			if f.cid.String() == cid {
-				blk, err := sh.BlockGet(f.path)
-				if err != nil {
-					return err
-				}
-				if err := ioutil.WriteFile(path.Join(tmp, f.cid.String()), blk, os.ModePerm); err != nil {
-					return err
-				}
-				continue
-			}
-			pth := x.DirPath + strings.TrimPrefix(f.path, "/ipfs/"+cid)
-			info, err := os.Stat(pth)
+			pth := x.DirPath + strings.TrimPrefix(f.Path, "/ipfs/"+rootCid)
+
+			in, err := os.Open(pth)
 			if err != nil {
 				return err
 			}
-			if info.IsDir() {
-				blk, err := sh.BlockGet(f.path)
-				if err != nil {
-					return err
-				}
-				if err := ioutil.WriteFile(path.Join(tmp, f.cid.String()), blk, os.ModePerm); err != nil {
-					return err
-				}
-			} else {
-				in, err := os.Open(pth)
-				if err != nil {
-					return err
-				}
-				out, err := os.Create(path.Join(tmp, f.cid.String()))
-				if err != nil {
-					return err
-				}
-				if _, err := io.Copy(in, out); err != nil {
-					return err
-				}
-				in.Close()
-				out.Close()
-			}
-			m := bson.M{"path": f.path, "bucket": i, "root": cid, "cid": f.cid.String()}
-			_, err = collection.InsertOne(context.Background(), m)
+			out, err := os.Create(path.Join(tmp, f.Cid))
 			if err != nil {
 				return err
 			}
+			if _, err := io.Copy(in, out); err != nil {
+				return err
+			}
+			in.Close()
+			out.Close()
 		}
 
 		ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateAuthKey)
@@ -125,37 +145,33 @@ func (x *Stage) Execute(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(outCid)
 		if err := os.RemoveAll(tmp); err != nil {
 			return err
 		}
 
-		m := bson.M{"rootID": cid, "bucketID": outCid.String(), "bucketIdx": i}
-		_, err = collection.InsertOne(context.Background(), m)
-		if err != nil {
-			return err
+		for x := range buckets[i+1] {
+			buckets[i+1][x].BucketID = outCid.String()
+			_, err = collection.InsertOne(context.Background(), buckets[i+1][x])
+			if err != nil {
+				return err
+			}
 		}
+		bucketCids = append(bucketCids, outCid.String())
+	}
+	fmt.Print("done\n")
+	fmt.Println("Filecoin Bucket Cids:")
+	for _, id := range bucketCids {
+		fmt.Println(id)
 	}
 
 	return nil
 }
 
-type ipfsObject struct {
-	path string
-	cid  cid.Cid
-	size int
-}
-
-func enumerateFiles(pth, id string, sh *shell.Shell, objs map[ipfsObject]struct{}) error {
-	d, err := cid.Decode(id)
+func enumerateFiles(pth, id string, sh *shell.Shell, objs map[Object]struct{}) error {
+	stat, err := sh.FilesStat(context.Background(), pth)
 	if err != nil {
 		return err
 	}
-	stat, err := sh.ObjectStat(id)
-	if err != nil {
-		return err
-	}
-	dataSize := stat.DataSize
 	obj, err := sh.ObjectGet(id)
 	if err != nil {
 		return err
@@ -165,19 +181,14 @@ func enumerateFiles(pth, id string, sh *shell.Shell, objs map[ipfsObject]struct{
 			if err := enumerateFiles(path.Join(pth, link.Name), link.Hash, sh, objs); err != nil {
 				return err
 			}
-		} else {
-			stat, err := sh.ObjectStat(link.Hash)
-			if err != nil {
-				return err
-			}
-			dataSize += stat.DataSize
 		}
 	}
 
-	objs[ipfsObject{
-		cid:  d,
-		path: pth,
-		size: dataSize,
+	objs[Object{
+		Cid:   id,
+		Path:  pth,
+		Size:  stat.Size,
+		IsDir: stat.Type == "directory",
 	}] = struct{}{}
 	return nil
 }
