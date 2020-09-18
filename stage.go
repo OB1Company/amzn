@@ -20,7 +20,7 @@ type Stage struct {
 	IpfsAPI          string `short:"a" long:"ipfsapi" description:"The hostname:port of the IPFS API." default:"127.0.0.1:5001"`
 	IPFSReverseProxy string `long:"ipfsreverseproxy" description:"An IPFS reverse proxy address if needed." default:"127.0.0.1:6002"`
 	PowergateAPI     string `short:"p" long:"powergateapi" description:"The hostname:port of the Powergate API." default:"127.0.0.1:5002"`
-	PowergateAuthKey string `long:"powergateauthkey" description:"An authentication key for powergate if needed." default:""`
+	PowergateToken string `long:"powergatetoken" description:"An authentication token for powergate if needed." default:""`
 	DbAPI            string `long:"db" default:"localhost:27017"`
 	DirPath          string `short:"d" long:"directory path" description:"The path to the directory to stage."`
 }
@@ -97,7 +97,7 @@ func (x *Stage) Execute(args []string) error {
 	}
 
 	var bucketCids []string
-	ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateAuthKey)
+	ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateToken)
 	outCid, err := client.FFS.StageFolder(ctx, x.IPFSReverseProxy, tmp0)
 	if err != nil {
 		return err
@@ -140,7 +140,7 @@ func (x *Stage) Execute(args []string) error {
 			out.Close()
 		}
 
-		ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateAuthKey)
+		ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateToken)
 		outCid, err := client.FFS.StageFolder(ctx, x.IPFSReverseProxy, tmp)
 		if err != nil {
 			return err
