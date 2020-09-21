@@ -28,7 +28,7 @@ type Stage struct {
 type Object struct {
 	Path     string
 	Cid      string
-	Size     uint64
+	Size     int64
 	IsDir    bool
 	BucketID string
 }
@@ -61,12 +61,12 @@ func (x *Stage) Execute(args []string) error {
 	fmt.Printf("IPFS Root Cid: %s\n\n", rootCid)
 
 	files := make(map[Object]struct{})
-	if err := enumerateFiles("/ipfs/"+rootCid, rootCid, sh, files); err != nil {
+	if err := enumerateFiles(x.DirPath, "/ipfs/"+rootCid, "", rootCid, sh, files); err != nil {
 		return err
 	}
 
 	buckets := make([][]Object, 2)
-	idx, bucketSize := 1, uint64(0)
+	idx, bucketSize := 1, int64(0)
 	for f := range files {
 		if f.IsDir {
 			buckets[0] = append(buckets[0], f)
@@ -167,8 +167,8 @@ func (x *Stage) Execute(args []string) error {
 	return nil
 }
 
-func enumerateFiles(pth, id string, sh *shell.Shell, objs map[Object]struct{}) error {
-	stat, err := sh.FilesStat(context.Background(), pth)
+func enumerateFiles(osPathPrefix, ipfsPathPrefix, pth, id string, sh *shell.Shell, objs map[Object]struct{}) error {
+	stat, err := os.Stat(path.Join(osPathPrefix, pth))
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func enumerateFiles(pth, id string, sh *shell.Shell, objs map[Object]struct{}) e
 	}
 	for _, link := range obj.Links {
 		if link.Name != "" {
-			if err := enumerateFiles(path.Join(pth, link.Name), link.Hash, sh, objs); err != nil {
+			if err := enumerateFiles(osPathPrefix, ipfsPathPrefix, path.Join(pth, link.Name), link.Hash, sh, objs); err != nil {
 				return err
 			}
 		}
@@ -186,9 +186,9 @@ func enumerateFiles(pth, id string, sh *shell.Shell, objs map[Object]struct{}) e
 
 	objs[Object{
 		Cid:   id,
-		Path:  pth,
-		Size:  stat.Size,
-		IsDir: stat.Type == "directory",
+		Path:  path.Join(ipfsPathPrefix, pth),
+		Size:  stat.Size(),
+		IsDir: stat.IsDir(),
 	}] = struct{}{}
 	return nil
 }
