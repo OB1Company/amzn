@@ -20,7 +20,7 @@ type Stage struct {
 	IpfsAPI          string `short:"a" long:"ipfsapi" description:"The hostname:port of the IPFS API." default:"127.0.0.1:5001"`
 	IPFSReverseProxy string `long:"ipfsreverseproxy" description:"An IPFS reverse proxy address if needed." default:"127.0.0.1:6002"`
 	PowergateAPI     string `short:"p" long:"powergateapi" description:"The hostname:port of the Powergate API." default:"127.0.0.1:5002"`
-	PowergateToken string `long:"powergatetoken" description:"An authentication token for powergate if needed." default:""`
+	PowergateToken   string `long:"powergatetoken" description:"An authentication token for powergate if needed." default:""`
 	DbAPI            string `long:"db" default:"localhost:27017"`
 	DirPath          string `short:"d" long:"directory path" description:"The path to the directory to stage."`
 }
@@ -65,11 +65,17 @@ func (x *Stage) Execute(args []string) error {
 		return err
 	}
 
-	buckets := make([][]Object, 2)
-	idx, bucketSize := 1, int64(0)
+	buckets := make([][]Object, 1)
+	idx, bucketSize := 0, int64(0)
 	for f := range files {
 		if f.IsDir {
 			buckets[0] = append(buckets[0], f)
+			bucketSize += f.Size
+		}
+	}
+
+	for f := range files {
+		if f.IsDir {
 			continue
 		}
 
@@ -82,47 +88,26 @@ func (x *Stage) Execute(args []string) error {
 		buckets[idx] = append(buckets[idx], f)
 	}
 
-	tmp0 := path.Join(os.TempDir(), fmt.Sprintf("amzn-bucket%d", 0))
-	if err := os.Mkdir(tmp0, os.ModePerm); err != nil {
-		return err
-	}
-	for _, f := range buckets[0] {
-		blk, err := sh.BlockGet(f.Path)
-		if err != nil {
-			return err
-		}
-		if err := ioutil.WriteFile(path.Join(tmp0, f.Cid), blk, os.ModePerm); err != nil {
-			return err
-		}
-	}
-
 	var bucketCids []string
-	ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateToken)
-	outCid, err := client.FFS.StageFolder(ctx, x.IPFSReverseProxy, tmp0)
-	if err != nil {
-		return err
-	}
-	bucketCids = append(bucketCids, outCid.String())
-	if err := os.RemoveAll(tmp0); err != nil {
-		return err
-	}
-
-	for i := range buckets[0] {
-		buckets[0][i].BucketID = outCid.String()
-		_, err = collection.InsertOne(context.Background(), buckets[0][i])
-		if err != nil {
-			return err
-		}
-	}
-
 	fmt.Print("Staging in powergate...")
-	for i, bucket := range buckets[1:] {
+	for i, bucket := range buckets {
 		tmp := path.Join(os.TempDir(), fmt.Sprintf("amzn-bucket%d", i))
 		if err := os.Mkdir(tmp, os.ModePerm); err != nil {
 			return err
 		}
 
 		for _, f := range bucket {
+			if f.IsDir {
+				blk, err := sh.BlockGet(f.Path)
+				if err != nil {
+					return err
+				}
+				if err := ioutil.WriteFile(path.Join(tmp, f.Cid), blk, os.ModePerm); err != nil {
+					return err
+				}
+				continue
+			}
+
 			pth := x.DirPath + strings.TrimPrefix(f.Path, "/ipfs/"+rootCid)
 
 			in, err := os.Open(pth)
@@ -133,7 +118,7 @@ func (x *Stage) Execute(args []string) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(in, out); err != nil {
+			if _, err := io.Copy(out, in); err != nil {
 				return err
 			}
 			in.Close()
@@ -172,11 +157,11 @@ func enumerateFiles(osPathPrefix, ipfsPathPrefix, pth, id string, sh *shell.Shel
 	if err != nil {
 		return err
 	}
-	obj, err := sh.ObjectGet(id)
+	links, err := sh.List(id)
 	if err != nil {
 		return err
 	}
-	for _, link := range obj.Links {
+	for _, link := range links {
 		if link.Name != "" {
 			if err := enumerateFiles(osPathPrefix, ipfsPathPrefix, path.Join(pth, link.Name), link.Hash, sh, objs); err != nil {
 				return err
