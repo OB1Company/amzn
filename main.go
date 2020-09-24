@@ -19,6 +19,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	_, err = parser.AddCommand("serve",
+		"start the web server",
+		"The serve command will start the web serve to serve files stored by amzn. It will first "+
+			"try to find the file on IPFS, if it's not there it will download it from filecoin.",
+		&Serve{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if _, err := parser.Parse(); err != nil {
 		os.Exit(1)
 	}
