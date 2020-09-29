@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/ob1company/amzn/static"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -56,9 +57,21 @@ func (x *Serve) handle(w http.ResponseWriter, r *http.Request) {
 
 	err = x.db.FindOne(context.Background(), filter).Decode(&obj)
 	if err != nil {
-		// TODO: return some kind of not found page
-		http.Error(w, err.Error(), http.StatusNotFound)
+		w.WriteHeader(http.StatusNotFound)
+
+		notFoundPage, err := static.Asset("notfound.html")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(notFoundPage)
 		return
 	}
-	w.Write([]byte("We are fetching this file from filecoin. Please check back later."))
+	fetchingPage, err := static.Asset("fetching.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write(fetchingPage)
+	return
 }
