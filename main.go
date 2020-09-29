@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/jessevdk/go-flags"
-	"github.com/prometheus/common/log"
 	"os"
 )
 
