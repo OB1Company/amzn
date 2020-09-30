@@ -14,8 +14,6 @@ import (
 	"strings"
 )
 
-const maxBucketSize = 1000000000
-
 type Stage struct {
 	IpfsAPI          string `short:"a" long:"ipfsapi" description:"The hostname:port of the IPFS API." default:"127.0.0.1:5001"`
 	IPFSReverseProxy string `long:"ipfsreverseproxy" description:"An IPFS reverse proxy address if needed." default:"127.0.0.1:6002"`
@@ -23,6 +21,7 @@ type Stage struct {
 	PowergateToken   string `long:"powergatetoken" description:"An authentication token for powergate if needed." default:""`
 	DbAPI            string `long:"db" default:"localhost:27017"`
 	DirPath          string `short:"d" long:"directory path" description:"The path to the directory to stage."`
+	BucketSize       uint64 `short:"b" long:"bucketsize" description:"The size of each bucket stored in filecoin." default:"1000000000"`
 }
 
 type Object struct {
@@ -79,7 +78,7 @@ func (x *Stage) Execute(args []string) error {
 			continue
 		}
 
-		if bucketSize+f.Size > maxBucketSize {
+		if bucketSize+f.Size > int64(x.BucketSize) {
 			buckets = append(buckets, []Object{})
 			idx++
 			bucketSize = 0
