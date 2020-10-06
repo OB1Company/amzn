@@ -19,7 +19,6 @@ type Store struct {
 	PowergateAPI     string `short:"p" long:"powergateapi" description:"The hostname:port of the Powergate API." default:"127.0.0.1:5002"`
 	PowergateToken   string `long:"powergatetoken" description:"An authentication token for powergate if needed." default:""`
 	DbAPI            string `long:"db" default:"localhost:27017"`
-	DirPath          string `short:"d" long:"directory path" description:"The path to the directory to stage."`
 	Cid              string `short:"c" long:"cid" description:"The CID of a previously staged directly that you want to store in filecoin."`
 }
 
@@ -42,7 +41,7 @@ func (x *Store) Execute(args []string) error {
 		dir    Dir
 		events = make(chan powergate.JobEvent)
 	)
-	filter := bson.D{{"rootCID", x.Cid}}
+	filter := bson.D{{"rootcid", x.Cid}}
 
 	if err := collection.FindOne(context.TODO(), filter).Decode(&dir); err != nil {
 		return err
@@ -58,7 +57,8 @@ func (x *Store) Execute(args []string) error {
 			return err
 		}
 
-		jobID, err := client.FFS.PushStorageConfig(context.TODO(), id)
+		ctx := context.WithValue(context.Background(), powergate.AuthKey, x.PowergateToken)
+		jobID, err := client.FFS.PushStorageConfig(ctx, id, powergate.WithOverride(true))
 		if err != nil {
 			return err
 		}
@@ -68,11 +68,13 @@ func (x *Store) Execute(args []string) error {
 			Cid: id,
 		}
 
-		update := bson.D{
-			{"$inc", bson.D{
-				{"Jobs", dir.Jobs},
-			}},
+		update := bson.M{
+			"$set": bson.M{
+				"Jobs": dir.Jobs,
+			},
 		}
+		fmt.Println(dir.Jobs)
+
 		if _, err := collection.UpdateOne(context.TODO(), filter, update); err != nil {
 			return err
 		}
