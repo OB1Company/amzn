@@ -5,6 +5,7 @@ import (
 	"fmt"
 	shell "github.com/ipfs/go-ipfs-api"
 	powergate "github.com/textileio/powergate/api/client"
+	"github.com/textileio/powergate/ffs"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"io"
@@ -30,6 +31,12 @@ type Object struct {
 	Size     int64
 	IsDir    bool
 	BucketID string
+}
+
+type Dir struct {
+	RootCID string
+	Buckets []string
+	Jobs    map[string]ffs.Job
 }
 
 func (x *Stage) Execute(args []string) error {
@@ -133,9 +140,9 @@ func (x *Stage) Execute(args []string) error {
 			return err
 		}
 
-		for x := range buckets[i+1] {
-			buckets[i+1][x].BucketID = outCid.String()
-			_, err = collection.InsertOne(context.Background(), buckets[i+1][x])
+		for x := range buckets[i] {
+			buckets[i][x].BucketID = outCid.String()
+			_, err = collection.InsertOne(context.Background(), buckets[i][x])
 			if err != nil {
 				return err
 			}
@@ -146,6 +153,15 @@ func (x *Stage) Execute(args []string) error {
 	fmt.Println("Filecoin Bucket Cids:")
 	for _, id := range bucketCids {
 		fmt.Println(id)
+	}
+
+	_, err = collection.InsertOne(context.Background(), Dir{
+		Buckets: bucketCids,
+		RootCID: rootCid,
+		Jobs:    make(map[string]ffs.Job),
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil
